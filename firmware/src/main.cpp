@@ -441,6 +441,11 @@ static void handle_rotation_change(void) {
 
 void loop() {
     touch_read();
+    // Feed the raw touch state to the swipe detector BEFORE LVGL processes
+    // the same touch — that way ui_touch_tick can mark a swipe as
+    // "handled" and the global_click_cb in ui.cpp will skip the splash
+    // toggle when LVGL fires CLICKED on release.
+    ui_touch_tick(touch_pressed, touch_x, touch_y);
     lv_timer_handler();
     ui_tick_anim();
     ui_tick_details();

@@ -158,7 +158,11 @@ static void format_reset_time(int mins, char* buf, size_t len) {
 // Forward decls — callbacks defined near ui_show_screen below
 static void global_click_cb(lv_event_t* e);
 static void ble_reset_click_cb(lv_event_t* e);
-static void swipe_gesture_cb(lv_event_t* e);
+
+// Set when ui_touch_tick recognises a swipe. Causes the click handler to
+// ignore the next CLICKED event so the splash-toggle doesn't fight the
+// swipe-driven screen switch.
+static uint32_t suppress_click_until_ms = 0;
 
 static lv_obj_t* make_panel(lv_obj_t* parent, int x, int y, int w, int h) {
     lv_obj_t* panel = lv_obj_create(parent);
@@ -523,9 +527,11 @@ void ui_init(void) {
     init_bluetooth_screen(scr);
     splash_init(scr);
 
-    // Swipe gestures on Usage ↔ Details. Bubbles up from child taps too.
-    lv_obj_add_event_cb(usage_container,   swipe_gesture_cb, LV_EVENT_GESTURE, NULL);
-    lv_obj_add_event_cb(details_container, swipe_gesture_cb, LV_EVENT_GESTURE, NULL);
+    // Note: swipe gestures are detected in ui_touch_tick (called from
+    // main loop) rather than via LVGL's gesture events — the CST92xx
+    // sample rate is too low to reliably trigger LVGL's gesture
+    // recogniser, and a missed gesture falls through as a click which
+    // toggles the splash.
 
     // Splash is touch-toggled — tap anywhere on the splash dismisses it
     if (splash_get_root()) {
@@ -631,7 +637,53 @@ static void apply_battery_visibility(void) {
 static void global_click_cb(lv_event_t* e) {
     (void)e;
     if (ui_get_current_screen() == SCREEN_BLUETOOTH) return;
+    // A swipe just happened — eat the spurious tap so we don't immediately
+    // bounce to the splash.
+    if ((int32_t)(lv_tick_get() - suppress_click_until_ms) < 0) return;
     ui_toggle_splash();
+}
+
+void ui_touch_tick(bool pressed, int x, int y) {
+    static bool was_pressed = false;
+    static int start_x = 0, start_y = 0;
+    static int last_x = 0, last_y = 0;
+    static uint32_t start_ms = 0;
+    static bool swipe_fired = false;
+
+    uint32_t now = lv_tick_get();
+
+    if (pressed && !was_pressed) {
+        // Press start
+        start_x = last_x = x;
+        start_y = last_y = y;
+        start_ms = now;
+        swipe_fired = false;
+    } else if (pressed) {
+        // Drag — check live for a horizontal swipe so we can fire as soon
+        // as the threshold is crossed (don't wait for release).
+        last_x = x;
+        last_y = y;
+        if (!swipe_fired) {
+            int dx = x - start_x;
+            int dy = y - start_y;
+            if (abs(dx) > 70 && abs(dy) < 80 && (now - start_ms) < 1000) {
+                screen_t cur = current_screen;
+                if (dx < 0 && cur == SCREEN_USAGE) {
+                    ui_show_screen(SCREEN_DETAILS);
+                    swipe_fired = true;
+                } else if (dx > 0 && cur == SCREEN_DETAILS) {
+                    ui_show_screen(SCREEN_USAGE);
+                    swipe_fired = true;
+                }
+                if (swipe_fired) suppress_click_until_ms = now + 400;
+            }
+        }
+    } else if (!pressed && was_pressed && swipe_fired) {
+        // Release after a swipe — keep the click-suppress window alive a
+        // bit longer in case LVGL queues the release event late.
+        suppress_click_until_ms = now + 400;
+    }
+    was_pressed = pressed;
 }
 
 static void ble_reset_click_cb(lv_event_t* e) {
@@ -674,22 +726,6 @@ void ui_cycle_screen(void) {
         next = SCREEN_BLUETOOTH;
     }
     ui_show_screen(next);
-}
-
-// LVGL gesture event: swipe left from Usage → Details; swipe right from
-// Details → Usage. Bluetooth and Splash ignore swipes (BT has its own tap
-// zones, splash has its own touch-toggle handler).
-static void swipe_gesture_cb(lv_event_t* e) {
-    (void)e;
-    lv_indev_t* indev = lv_indev_active();
-    if (!indev) return;
-    lv_dir_t dir = lv_indev_get_gesture_dir(indev);
-
-    if (current_screen == SCREEN_USAGE && dir == LV_DIR_LEFT) {
-        ui_show_screen(SCREEN_DETAILS);
-    } else if (current_screen == SCREEN_DETAILS && dir == LV_DIR_RIGHT) {
-        ui_show_screen(SCREEN_USAGE);
-    }
 }
 
 void ui_tick_details(void) {
