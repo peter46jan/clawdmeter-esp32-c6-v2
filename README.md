@@ -1,90 +1,91 @@
 # Clawdmeter — ESP32-C6 fork
 
-## Het verhaal
+## The story
 
-Als AI-liefhebber zag ik [Hermann's originele Clawdmeter](https://github.com/HermannBjorgvin/Clawdmeter) langs komen en wilde ik er meteen één voor mijn bureau. Klein dashboardje dat live je Claude Code usage laat zien — perfect.
+As an AI enthusiast I came across [Hermann's original Clawdmeter](https://github.com/HermannBjorgvin/Clawdmeter) and immediately wanted one on my desk. A small dashboard showing your live Claude Code usage — perfect.
 
-Helaas: het **verkeerde kastje besteld**. Hermann's project draait op de Waveshare **ESP32-S3**-Touch-AMOLED-2.16, en ik had de **ESP32-C6** versie liggen. Niet hetzelfde — andere CPU (RISC-V vs Xtensa), geen PSRAM (512KB SRAM totaal), ander display-IC (SH8601 i.p.v. CO5300), andere pinout, andere buttons.
+Unfortunately, I **ordered the wrong board**. Hermann's project runs on the Waveshare **ESP32-S3**-Touch-AMOLED-2.16, and what I had was the **ESP32-C6** version. Not the same thing — different CPU (RISC-V vs Xtensa), no PSRAM (just 512KB SRAM total), different display IC (SH8601 instead of CO5300), different pinout, different buttons.
 
-In plaats van het terugsturen heb ik samen met **Claude Code** de hele firmware geport. Wat werkt nu op de C6:
-- SH8601 driver met de vendor-init sequence (zonder dit blijft het paneel zwart).
-- Per-strip QSPI push die de display niet verwart (CS-toggle bug is écht).
-- Splash-animatie herontworpen van 460KB CPU-canvas naar een 20×20 LVGL image met 24× zoom — past in 800 bytes.
-- Snapshot/screenshot uit (past niet zonder PSRAM).
-- Knoppen opnieuw gemapped: BOOT (links), KEY2 (rechts), KEY1 (PWR).
-- IMU-rotatie-as transform omdat de QMI8658 fysiek anders gemonteerd zit.
-- Touch coords meegedraaid met het scherm zodat swipes blijven werken in elke oriëntatie.
+Rather than send it back, I sat down with **Claude Code** and ported the whole firmware. What now works on the C6:
 
-## Wat ik daarna toegevoegd heb
+- SH8601 driver with the vendor init sequence (without this the panel powers on but stays dark).
+- Per-strip QSPI push that doesn't confuse the panel (the CS-toggle bug is real — `draw16bitRGBBitmap()` per strip blanks the screen on this revision).
+- Splash animation redesigned from a 460KB CPU-upscaled canvas to a 20×20 LVGL image with 24× zoom — 800 bytes total.
+- Snapshot/screenshot command disabled (doesn't fit without PSRAM).
+- Buttons re-mapped: BOOT (left), KEY2 (right), KEY1 (PWR via AXP).
+- IMU axis transform because the QMI8658 is physically mounted at a different orientation on this board.
+- Touch coordinates rotate with the screen so swipes keep working in any orientation.
 
-Naast de port nog twee features die het ding écht functioneel maken:
+## What I added on top
 
-### 1. Tweede pagina: Extra usage / Monthly spend
+Beyond the port itself, two features that make the device genuinely useful:
 
-Swipe op het Usage scherm **van rechts naar links** → je komt op een nieuwe Details-pagina die je month-to-date API spend laat zien (precies wat in `console.anthropic.com → Settings → Billing` staat als "Extra usage"). Inclusief budget en progress-bar.
+### 1. Second page: Extra usage / monthly spend
 
-Data komt uit Anthropic's OAuth usage endpoint (`/api/oauth/usage`) — dezelfde token die Claude Code al gebruikt, geen aparte admin key nodig. Daemon haalt 'm op, stuurt 'm over BLE naar het kastje.
+On the Usage screen, **swipe right-to-left** → you land on a new Details page that shows your month-to-date API spend (exactly what `console.anthropic.com → Settings → Billing` calls "Extra usage"). Includes your budget and a progress bar.
 
-Swipe terug naar rechts om weer op het Usage scherm te komen.
+Data comes from Anthropic's OAuth usage endpoint (`/api/oauth/usage`) — same Bearer token Claude Code already has, no separate admin key needed. The daemon fetches it and pushes it to the device over BLE.
 
-### 2. Pomodoro focus-timer
+Swipe back left-to-right to return to the Usage screen.
 
-Met de rechterknop kan je een focus-sessie starten:
+### 2. Pomodoro focus timer
 
-| Knop-actie | Wat 't doet |
+Use the right side button to start a focus session:
+
+| Button action | What happens |
 |---|---|
-| 1× tikken | Shift+Tab (Claude Code mode toggle, zoals voorheen) |
-| 2× snel achter elkaar | 25-minuten focus-sessie |
-| 3× | 60-minuten sessie |
-| 4× | 90-minuten sessie |
+| 1 tap | Shift+Tab (Claude Code mode toggle, same as before) |
+| 2 taps in quick succession | 25-minute focus session |
+| 3 taps | 60-minute session |
+| 4 taps | 90-minute session |
 
-Fullscreen arc-countdown met `MM:SS` in het midden. Als de tijd op is: paneel flasht naar max brightness, "Done!" verschijnt, en het kastje **typt automatisch `/clear` + Enter naar Claude Code** zodat je in een schone conversatie begint. PWR-knop tijdens de timer = annuleren.
+Fullscreen arc countdown with `MM:SS` in the centre. When the timer expires: the panel flashes to maximum brightness, "Done!" appears, and the device **automatically types `/clear` + Enter into Claude Code** so you land in a fresh conversation. PWR button during the timer = cancel.
 
-Beide features werken alleen als de daemon aan staat en je met Claude bent ingelogd — zie hieronder.
+Both features only work when the daemon is running and you're signed in to Claude — see below.
 
-## Hoe verbind je je Claude account?
+## How to connect your Claude account
 
-De daemon op je Mac leest je Claude Code OAuth-token (uit `~/.claude/.credentials.json` of de macOS Keychain entry `Claude Code-credentials`) en pollt elke 60s de Anthropic API voor rate-limit + spend data. Die data wordt over BLE naar het kastje gestuurd.
+The daemon on your Mac reads your Claude Code OAuth token (from `~/.claude/.credentials.json` or the macOS Keychain entry `Claude Code-credentials`) and polls the Anthropic API every 60 seconds for rate-limit and spend data. That data goes over BLE to the device.
 
-**Eerste keer setup:**
+**First-time setup:**
 
-1. Zorg dat je in **Claude Code** ingelogd bent op je Mac:
+1. Make sure you're signed in to **Claude Code** on your Mac:
    ```bash
    claude login
    ```
-   (Of via de Claude Code app — installer leidt door OAuth flow.)
+   (Or via the Claude Code app — its installer walks you through the OAuth flow.)
 
-2. Daemon installeren:
+2. Install the daemon:
    ```bash
    cd Clawdmeter
    ./install-mac.sh
    ```
-   Dit maakt een Python venv met `bleak` en `httpx`, installeert een LaunchAgent die automatisch start, en vraagt om Bluetooth-permissie voor Terminal.
+   This creates a Python venv with `bleak` and `httpx`, installs a LaunchAgent that auto-starts, and prompts for Bluetooth permission for Terminal.
 
-3. Pair het kastje:
-   - System Settings → Bluetooth → klik **Connect** naast "Claude Controller".
-   - Daemon vindt 'm binnen ~30 seconden automatisch en begint data te sturen.
+3. Pair the device:
+   - System Settings → Bluetooth → click **Connect** next to "Claude Controller".
+   - The daemon discovers it within ~30 seconds and starts sending data.
 
-4. Verifieer dat 't werkt:
+4. Verify it's working:
    ```bash
    tail -F ~/Library/Logs/claude-usage-daemon.out.log
    ```
-   Je moet om de minuut een regel zien als:
+   Once a minute you should see a line like:
    ```
    Sending: {"s":12,"sr":155,"w":35,"wr":3015,"st":"allowed","ok":true,"eu":12.34,"em":50.0,"cu":"EUR"}
    ```
-   - `s` / `sr` = session % + reset (minuten) — Usage scherm bovenste balk
-   - `w` / `wr` = weekly % + reset — Usage scherm onderste balk
-   - `eu` / `em` / `cu` = extra usage, budget, currency — Details scherm
+   - `s` / `sr` = session % + reset (minutes) — Usage screen, top bar
+   - `w` / `wr` = weekly % + reset — Usage screen, bottom bar
+   - `eu` / `em` / `cu` = extra usage, budget, currency — Details screen
 
-**Account swappen?** Log uit en in via Claude Code (`claude logout` / `claude login`). De daemon pakt automatisch de nieuwe token op bij de volgende poll.
+**Switching accounts?** Sign out and back in via Claude Code (`claude logout` / `claude login`). The daemon picks up the new token on the next poll.
 
-**BLE adres reset** (bv. na firmware-flash op een ander board):
+**Reset cached BLE address** (e.g. after flashing firmware to a different board):
 ```bash
 rm ~/.config/claude-usage-monitor/ble-address
 ```
 
-## De originele beschrijving
+## Original description
 
 A small ESP32 dashboard I made for my desk to keep an eye on Claude Code usage.
 
